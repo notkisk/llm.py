@@ -7,7 +7,7 @@ from src import Model, medium_config, Embedding, RotaryPE, SelfAttention, FeedFo
 # Create config
 cfg = medium_config(vocab_size=50000, max_seq_len=2048)
 
-# Build MoE model
+# Build MoE model, isn't this awesome?
 model = (
     Model(cfg)
         .add(Embedding())
@@ -17,7 +17,7 @@ model = (
         .add(MoEHead(num_experts=8, top_k=2))
 )
 
-# Validate
+# Validate #TODO: validation is currently pretty basic, it does not take into account a lot of edge cases, will revist it later(probably means never)
 model.validate()
 
 # Print model info

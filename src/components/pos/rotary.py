@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from ...component import Component
 
@@ -62,7 +61,7 @@ class RotaryPE(Component):
 		sin = sin.unsqueeze(0).expand(x.size(0), -1, -1)
 		
 
-		num_freqs = self.inv_freq.size(0)
+		self.inv_freq.size(0)
 		
 
 		cos_full = cos.repeat_interleave(2, dim=-1)  # (batch, seq_len, num_freqs*2)

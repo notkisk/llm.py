@@ -2,7 +2,6 @@
 LayerNorm component - standalone normalization layer.
 """
 
-import torch
 import torch.nn as nn
 from ...component import Component
 

@@ -4,7 +4,6 @@ Uses a single key/value head shared across all query heads.
 Reduces memory for KV cache.
 """
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

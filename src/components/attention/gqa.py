@@ -3,7 +3,6 @@ Grouped Query Attention (GQA) implementation.
 Configurable number of KV heads between MHA and MQA.
 """
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

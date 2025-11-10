@@ -4,7 +4,6 @@ Takes query from one sequence, key/value from another.
 For encoder-decoder architectures.
 """
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

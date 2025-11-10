@@ -4,7 +4,6 @@ SwiGLU (Swish-Gated Linear Unit) activation component.
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from ...component import Component
 
 

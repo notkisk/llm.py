@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 from .component import Component
 
@@ -123,7 +122,7 @@ class Model(nn.Module):
         print(f"  Total parameters: {self.num_parameters:,}")
         print(f"  Trainable parameters: {self.num_trainable_parameters:,}")
         print(f"  Model size: {self.model_size_mb:.2f} MB")
-        print(f"\nComponent architecture:")
+        print("\nComponent architecture:")
         for i, comp in enumerate(self.components):
             comp_params = sum(p.numel() for p in comp.parameters())
             print(f"  [{i}] {comp.__class__.__name__} ({comp_params:,} params)")
