@@ -8,7 +8,7 @@ cfg = small_config(vocab_size=10000)
 model = (
     Model(cfg)
         .add(Embedding())
-        .add(RotaryPE())
+        .add(RotaryPE()) #XXX: still no actuall implementation yet
         .repeat(SelfAttention, 4, dropout=0.1)
         .add(FeedForward())
         .add(LMHead(tie_weights=True))
