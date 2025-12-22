@@ -36,7 +36,7 @@ class FeedForward(Component):
 		self.fc2 = nn.Linear(hidden, cfg.dim)
 		self.drop = nn.Dropout(self.dropout_p)
 
-	def forward(self, x):
+	def forward(self, x, **kwargs):
 		y = self.norm(x)
 		
 		if self.use_swiglu:

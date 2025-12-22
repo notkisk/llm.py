@@ -1,4 +1,4 @@
-from src import (
+from llm_py import (
     Model, small_config,
     Embedding, RotaryPE, SelfAttention, FeedForward, LMHead
 )
@@ -8,7 +8,7 @@ cfg = small_config(vocab_size=10000)
 model = (
     Model(cfg)
         .add(Embedding())
-        .add(RotaryPE()) #XXX: still no actuall implementation yet
+        .add(RotaryPE())
         .repeat(SelfAttention, 4, dropout=0.1)
         .add(FeedForward())
         .add(LMHead(tie_weights=True))
@@ -41,10 +41,28 @@ print("Model Representation:")
 print("=" * 50)
 print(model)
 
-from src.configs import Config
+from llm_py.configs import Config
 import torch
+
+# Run a single forward pass
+print("\n" + "=" * 50)
+print("Forward Pass Check:")
+print("=" * 50)
 x = torch.randint(0, cfg.vocab_size, (2, 32))
 out = model(x)
-print(f"\nInput shape: {x.shape}")
-print(f"Output shape: {out.shape}")
+print(f"Input shape: {x.shape}")
+print(f"Output shape: {out.shape}")  # Should be [2, 32, vocab_size]
+
+# Run Generation
+print("\n" + "=" * 50)
+print("Generation Demo (Random Weights):")
+print("=" * 50)
+# Start with a single token (e.g., token ID 1)
+start_ids = torch.tensor([[1]], dtype=torch.long)
+print(f"Starting ID: {start_ids.tolist()}")
+
+# Generate 10 new tokens
+generated = model.generate(start_ids, max_new_tokens=10, temperature=0.0)
+print(f"Generated Sequence: {generated.tolist()}")
+print("(Note: Output is random integers because model is initialized with random weights)")
 

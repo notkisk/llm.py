@@ -5,10 +5,11 @@ from ...component import Component
 
 
 class SelfAttention(Component):
-    def __init__(self, bias: bool = False, dropout: float = 0.0):
+    def __init__(self, bias: bool = False, dropout: float = 0.0, is_causal: bool = True):
         super().__init__(name="SelfAttention")
         self.bias = bias
         self.dropout_p = dropout
+        self.is_causal = is_causal
         self.norm = None
         self.qkv = None
         self.proj = None
@@ -29,7 +30,7 @@ class SelfAttention(Component):
         self.attn_drop = nn.Dropout(self.dropout_p)
         self.proj_drop = nn.Dropout(self.dropout_p)
 
-    def forward(self, x, mask: torch.Tensor = None):
+    def forward(self, x, mask: torch.Tensor = None, past_key_value = None, **kwargs):
         if not hasattr(self, "cfg"):
             raise ValueError(f"cfg not set for {self.name}")
 
@@ -44,10 +45,27 @@ class SelfAttention(Component):
         k = k.view(B, T, self.cfg.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.cfg.num_heads, self.head_dim).transpose(1, 2)
 
+        if past_key_value is not None:
+            past_k, past_v = past_key_value
+            k = torch.cat([past_k, k], dim=2)
+            v = torch.cat([past_v, v], dim=2)
+        
+        current_key_value = (k, v)
+
         attn = (q @ k.transpose(-2, -1)) * self.scale
 
         if mask is not None:
             attn = attn.masked_fill(mask == 0, float('-inf'))
+        elif self.is_causal and T > 1:
+            # Apply causal mask: mask positions where q_i attends to k_j with j > i
+            # q shape (B, H, T, D). k shape (B, H, T_k, D).
+            # attn shape (B, H, T, T_k).
+            # We want diag to include self.
+            # j > i + (T_k - T)?
+            # Case Naive: T_k = T. j > i. 
+            T_k = k.size(2)
+            causal_mask = torch.triu(torch.ones(T, T_k, device=x.device), diagonal=1 + T_k - T).bool()
+            attn = attn.masked_fill(causal_mask, float('-inf'))
 
         attn = F.softmax(attn, dim=-1)
         attn = self.attn_drop(attn)
@@ -57,4 +75,5 @@ class SelfAttention(Component):
         out = self.proj(out)
         out = self.proj_drop(out)
 
-        return x + out
+        return x + out, current_key_value
+

@@ -29,18 +29,20 @@ class RotaryPE(Component):
 
 	def _rotate_half(self, x):
 		"""Rotate half the hidden dims of the input."""
-		x1, x2 = x.chunk(2, dim=-1)
-		return torch.cat([-x2, x1], dim=-1)
+		x = x.view(x.shape[:-1] + (-1, 2))
+		x1, x2 = x.unbind(dim=-1)
+		return torch.stack((-x2, x1), dim=-1).flatten(-2)
 
 	def _apply_rotary_pos_emb(self, x, cos, sin):
 		"""Apply rotary positional embedding."""
 		return (x * cos) + (self._rotate_half(x) * sin)
 
-	def forward(self, x):
+	def forward(self, x, offset: int = 0, **kwargs):
 		"""Apply rotary positional encoding.
 		
 		Args:
 			x: Input tensor of shape (batch, seq_len, dim)
+			offset: Starting position for the sequence (default: 0)
 		
 		Returns:
 			x with rotary positional encoding applied
@@ -50,7 +52,7 @@ class RotaryPE(Component):
 		dtype = x.dtype
 		dim = x.size(-1)
 		
-		t = torch.arange(seq_len, device=device, dtype=dtype)
+		t = torch.arange(seq_len, device=device, dtype=dtype) + offset
 		
 		freqs = torch.outer(t, self.inv_freq)
 		
@@ -59,9 +61,6 @@ class RotaryPE(Component):
 		
 		cos = cos.unsqueeze(0).expand(x.size(0), -1, -1)  # (batch, seq_len, num_freqs)
 		sin = sin.unsqueeze(0).expand(x.size(0), -1, -1)
-		
-
-		self.inv_freq.size(0)
 		
 
 		cos_full = cos.repeat_interleave(2, dim=-1)  # (batch, seq_len, num_freqs*2)

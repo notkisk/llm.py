@@ -37,7 +37,7 @@ class LMHead(Component):
 			else:
 				raise ValueError("Embedding component must have 'embed.weight' for weight tying")
 
-	def forward(self, x):
+	def forward(self, x, **kwargs):
 		"""Forward pass.
 		
 		Args:
