@@ -7,9 +7,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ...component import Component
-
+from ..pos.rotary import apply_rotary_pos_emb
 
 class GroupedQueryAttention(Component):
+	# ... (init unchanged) ...
 	"""Grouped Query Attention: configurable number of KV heads.
 	
 	Args:
@@ -52,7 +53,7 @@ class GroupedQueryAttention(Component):
 		self.attn_drop = nn.Dropout(self.dropout_p)
 		self.proj_drop = nn.Dropout(self.dropout_p)
 
-	def forward(self, x, mask: torch.Tensor = None):
+	def forward(self, x, mask: torch.Tensor = None, rotary_pos_emb = None, attention_bias = None, **kwargs):
 		"""Forward pass.
 		
 		Args:
@@ -74,10 +75,19 @@ class GroupedQueryAttention(Component):
 		k = k.view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)  # (batch, kv_heads, seq_len, head_dim)
 		v = v.view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
+		# Apply RoPE
+		if rotary_pos_emb is not None:
+			cos, sin = rotary_pos_emb
+			q = apply_rotary_pos_emb(q, cos, sin)
+			k = apply_rotary_pos_emb(k, cos, sin)
+
 		k = k.repeat_interleave(self.num_groups, dim=1)  # (batch, heads, seq_len, head_dim)
 		v = v.repeat_interleave(self.num_groups, dim=1)
 
 		attn = (q @ k.transpose(-2, -1)) * self.scale  # (batch, heads, seq_len, seq_len)
+		
+		if attention_bias is not None:
+			attn = attn + attention_bias
 
 		causal_mask = torch.triu(torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1)
 		attn = attn.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float('-inf'))

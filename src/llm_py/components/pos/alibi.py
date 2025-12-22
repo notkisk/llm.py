@@ -51,9 +51,23 @@ class Alibi(Component):
 			device: Device to create bias on
 		
 		Returns:
-			Bias tensor of shape (num_heads, seq_len, seq_len)
+			Bias tensor of shape (1, num_heads, 1, seq_len)
 		"""
-		...
+		context_position = torch.arange(seq_len, device=device)[:, None]
+		memory_position = torch.arange(seq_len, device=device)[None, :]
+		relative_position = memory_position - context_position 
+		relative_position = torch.abs(relative_position).unsqueeze(0).expand(self.num_heads, -1, -1)
+		
+		# Slopes are (num_heads,)
+		slopes = self.slopes.unsqueeze(1).unsqueeze(1)
+		bias = slopes * relative_position
+		# Returns (1, num_heads, seq_len, seq_len)
+		return bias.unsqueeze(0)
 
-	def forward(self, x):
-		return x
+	def forward(self, x, **kwargs):
+		"""
+		Returns x and the ALiBi bias matrix.
+		"""
+		seq_len = x.size(1)
+		bias = self.get_bias(seq_len, x.device)
+		return x, bias

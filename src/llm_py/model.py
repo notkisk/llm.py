@@ -134,62 +134,55 @@ class Model(nn.Module):
         # Calculate offset for RotaryPE if using cache
         offset = 0
         if past_key_values is not None and len(past_key_values) > 0:
-            # Assuming key shape (B, H, T, D) or similar. 
-            # SelfAttention stores (k, v). k is (B, T, H, D) based on previous code usually?
-            # Re-checking SelfAttention: k = k.view(B, T, ...). So dim 1 is T.
-            # past_key_values[0][0] is k. shape[1] is T.
-            # Wait, PyTorch Concat: "k = torch.cat([past_k, k], dim=2)" in my update.
-            # Step 171: "k = torch.cat([past_k, k], dim=2)". 
-            # k originally: view(B, T, H, D).transpose(1, 2) -> (B, H, T, D).
-            # So dim=2 is T. Correct.
             offset = past_key_values[0][0].shape[2]
 
         kv_read_idx = 0
         
+        # Context to pass to components (like PE metadata)
+        context = {
+            'offset': offset,
+        }
+        
         for comp in self.components:
             comp_name = comp.__class__.__name__
             
-            if "RotaryPE" in comp_name:
-                x = comp(x, offset=offset, **kwargs)
-                continue
-            
-            if "SelfAttention" in comp_name:
+            # Special handling for Attention components to extract KV
+            if "SelfAttention" in comp_name or "MultiQueryAttention" in comp_name or "GroupedQueryAttention" in comp_name:
                 pkv = None
                 if past_key_values is not None and kv_read_idx < len(past_key_values):
                     pkv = past_key_values[kv_read_idx]
                 
-                # We expect SelfAttention to return (x, new_kv) if pkv provided OR if we ask for it?
-                # My previous edit: ALWAYS returns (x, current_key_value).
-                # Wait, I changed SelfAttention to ALWAYS return tuple?
-                # "return x + out, current_key_value"
-                # This BREAKS existing code if I don't handle it here!
-                # Yes, I must handle tuple return.
+                # Pass context (contains rotary_pos_emb, attention_bias if set)
+                out = comp(x, past_key_value=pkv, **context, **kwargs)
                 
-                out = comp(x, past_key_value=pkv, **kwargs)
                 if isinstance(out, tuple):
                     x, new_kv = out
-                    new_key_values.append(new_kv)
+                    # For Attention layers, the second item is KV cache
+                    if new_kv is not None: 
+                        new_key_values.append(new_kv)
                 else:
-                    # Should not happen based on my edit, but safe fallback
                     x = out
                 
                 kv_read_idx += 1
                 continue
+            
+            # General component execution
+            # Pass context to all components (PE might use offset, others ignore)
+            out = comp(x, **context, **kwargs)
+            
+            # Check if component returned metadata (PE layers)
+            if isinstance(out, tuple):
+                x, metadata = out
                 
-            x = comp(x, **kwargs) # Pass kwargs to others (FFN etc)
+                if "RotaryPE" in comp_name:
+                    context['rotary_pos_emb'] = metadata
+                elif "Alibi" in comp_name:
+                    context['attention_bias'] = metadata
+            else:
+                x = out
 
         if past_key_values is not None:
              return x, new_key_values
-        
-        # If we just computed keys but didn't pass past keys, do we return them?
-        # For generation start, we pass None, but we need new_key_values output.
-        # So we should return tuple if new_key_values is not empty?
-        # But this changes signature for standard training (example.py).
-        # existing example.py: out = model(x). out has shape ...
-        # If I return tuple, example.py breaks.
-        # Solution: Only return tuple if 'use_cache=True` in kwargs?
-        # OR if past_key_values is not None?
-        # But initial step of generation passes past_key_values=None.
         
         if kwargs.get('use_cache', False):
             return x, new_key_values

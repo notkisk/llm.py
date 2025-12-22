@@ -13,6 +13,31 @@ class RotaryPE(Component):
 		base: Base frequency for rotary encoding (default: 10000)
 		max_seq_len: Maximum sequence length (for pre-computation, optional)
 	"""
+def rotate_half(x):
+	"""Rotate half the hidden dims of the input."""
+	x = x.view(x.shape[:-1] + (-1, 2))
+	x1, x2 = x.unbind(dim=-1)
+	return torch.stack((-x2, x1), dim=-1).flatten(-2)
+
+def apply_rotary_pos_emb(x, cos, sin):
+	"""Apply rotary positional embedding.
+	x: (batch, heads, seq_len, head_dim)
+	cos, sin: (batch, 1, seq_len, head_dim) or broadcastable
+	"""
+	# Ensure cos/sin are broadcastable to x
+	# x is usually (B, H, T, D). cos/sin are (1, 1, T, D) or (B, 1, T, D).
+	return (x * cos) + (rotate_half(x) * sin)
+
+class RotaryPE(Component):
+	"""Rotary Positional Encoding (RoPE).
+	
+	Calculates rotary embeddings and passes them for use in attention.
+	Note: Does NOT apply embeddings to input 'x' directly.
+	
+	Args:
+		base: Base frequency for rotary encoding (default: 10000)
+		max_seq_len: Maximum sequence length (for pre-computation, optional)
+	"""
 	def __init__(self, base: float = 10000.0, max_seq_len: int = None):
 		super().__init__(name="RotaryPE")
 		self.base = base
@@ -23,71 +48,42 @@ class RotaryPE(Component):
 		if 'inv_freq' not in self._buffers:
 			if 'inv_freq' in self.__dict__:
 				delattr(self, 'inv_freq')
-			head_dim = cfg.dim
+			head_dim = cfg.dim // cfg.num_heads
 			inv_freq = 1.0 / (self.base ** (torch.arange(0, head_dim, 2).float() / head_dim))
 			self.register_buffer('inv_freq', inv_freq, persistent=False)
 
-	def _rotate_half(self, x):
-		"""Rotate half the hidden dims of the input."""
-		x = x.view(x.shape[:-1] + (-1, 2))
-		x1, x2 = x.unbind(dim=-1)
-		return torch.stack((-x2, x1), dim=-1).flatten(-2)
-
-	def _apply_rotary_pos_emb(self, x, cos, sin):
-		"""Apply rotary positional embedding."""
-		return (x * cos) + (self._rotate_half(x) * sin)
-
 	def forward(self, x, offset: int = 0, **kwargs):
-		"""Apply rotary positional encoding.
+		"""Calculate rotary positional encoding frequencies.
 		
 		Args:
-			x: Input tensor of shape (batch, seq_len, dim)
+			x: Input tensor (batched). Used only for shape inference (seq_len, device).
 			offset: Starting position for the sequence (default: 0)
 		
 		Returns:
-			x with rotary positional encoding applied
+			Tuple (x, (cos, sin)) where x is unchanged.
 		"""
 		seq_len = x.size(1)
 		device = x.device
 		dtype = x.dtype
-		dim = x.size(-1)
 		
 		t = torch.arange(seq_len, device=device, dtype=dtype) + offset
 		
 		freqs = torch.outer(t, self.inv_freq)
 		
-		cos = freqs.cos()  # (seq_len, num_freqs)
-		sin = freqs.sin()  # (seq_len, num_freqs)
+		cos = freqs.cos()  # (seq_len, head_dim/2)
+		sin = freqs.sin()  # (seq_len, head_dim/2)
 		
-		cos = cos.unsqueeze(0).expand(x.size(0), -1, -1)  # (batch, seq_len, num_freqs)
-		sin = sin.unsqueeze(0).expand(x.size(0), -1, -1)
+		# Reshape for Attention: (batch, heads, seq_len, head_dim)
+		# But here we just compute (seq_len, head_dim).
+		# Attention will broadcast. 
+		# We'll return (1, 1, seq_len, head_dim) to make it easy?
+		# Standard is usually (seq_len, head_dim).
+		# Let's match typical Attention broadcasting: (B, H, T, D)
 		
+		cos = cos.unsqueeze(0).unsqueeze(0) # (1, 1, seq_len, head_dim/2)
+		sin = sin.unsqueeze(0).unsqueeze(0)
+		
+		cos = cos.repeat_interleave(2, dim=-1) # (1, 1, seq_len, head_dim)
+		sin = sin.repeat_interleave(2, dim=-1)
 
-		cos_full = cos.repeat_interleave(2, dim=-1)  # (batch, seq_len, num_freqs*2)
-		sin_full = sin.repeat_interleave(2, dim=-1)
-		
-		if cos_full.size(-1) > dim:
-			cos_full = cos_full[..., :dim]
-			sin_full = sin_full[..., :dim]
-		elif cos_full.size(-1) < dim:
-			pad_size = dim - cos_full.size(-1)
-			cos_full = F.pad(cos_full, (0, pad_size), value=1.0)
-			sin_full = F.pad(sin_full, (0, pad_size), value=0.0)
-		
-		x1 = x[..., 0::2]  # (batch, seq_len, dim//2)
-		x2 = x[..., 1::2]  # (batch, seq_len, dim//2)
-		
-		cos_pairs = cos_full[..., 0::2]  # (batch, seq_len, dim//2)
-		sin_pairs = sin_full[..., 0::2]
-		
-		x1_rot = x1 * cos_pairs - x2 * sin_pairs
-		x2_rot = x1 * sin_pairs + x2 * cos_pairs
-		
-		x_rot = torch.zeros_like(x)
-		x_rot[..., 0::2] = x1_rot
-		x_rot[..., 1::2] = x2_rot
-		
-		if dim % 2 == 1:
-			x_rot[..., -1] = x[..., -1]
-		
-		return x_rot
+		return x, (cos, sin)

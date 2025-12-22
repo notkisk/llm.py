@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ...component import Component
-
+from ..pos.rotary import apply_rotary_pos_emb
 
 class MultiQueryAttention(Component):
 	"""Multi-Query Attention: single KV head shared across all query heads.
@@ -43,7 +43,7 @@ class MultiQueryAttention(Component):
 		self.attn_drop = nn.Dropout(self.dropout_p)
 		self.proj_drop = nn.Dropout(self.dropout_p)
 
-	def forward(self, x, mask: torch.Tensor = None):
+	def forward(self, x, mask: torch.Tensor = None, rotary_pos_emb = None, attention_bias = None, **kwargs):
 		"""Forward pass.
 		
 		Args:
@@ -62,10 +62,19 @@ class MultiQueryAttention(Component):
 		v = self.v_proj(x)  # (batch, seq_len, head_dim)
 
 		q = q.view(B, T, self.cfg.num_heads, self.head_dim).transpose(1, 2)  # (batch, heads, seq_len, head_dim)
-		k = k.unsqueeze(1)  # (batch, 1, seq_len, head_dim)
-		v = v.unsqueeze(1)  # (batch, 1, seq_len, head_dim)
+		k = k.view(B, T, 1, self.head_dim).transpose(1, 2)  # (batch, 1, seq_len, head_dim)
+		v = v.view(B, T, 1, self.head_dim).transpose(1, 2)
+
+		# Apply RoPE
+		if rotary_pos_emb is not None:
+			cos, sin = rotary_pos_emb
+			q = apply_rotary_pos_emb(q, cos, sin)
+			k = apply_rotary_pos_emb(k, cos, sin)
 
 		attn = (q @ k.transpose(-2, -1)) * self.scale  # (batch, heads, seq_len, seq_len)
+
+		if attention_bias is not None:
+			attn = attn + attention_bias
 
 		causal_mask = torch.triu(torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1)
 		attn = attn.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float('-inf'))

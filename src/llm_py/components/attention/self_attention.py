@@ -2,11 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ...component import Component
-
+from ..pos.rotary import apply_rotary_pos_emb
 
 class SelfAttention(Component):
     def __init__(self, bias: bool = False, dropout: float = 0.0, is_causal: bool = True):
         super().__init__(name="SelfAttention")
+        # ... existing init ...
         self.bias = bias
         self.dropout_p = dropout
         self.is_causal = is_causal
@@ -30,7 +31,7 @@ class SelfAttention(Component):
         self.attn_drop = nn.Dropout(self.dropout_p)
         self.proj_drop = nn.Dropout(self.dropout_p)
 
-    def forward(self, x, mask: torch.Tensor = None, past_key_value = None, **kwargs):
+    def forward(self, x, mask: torch.Tensor = None, past_key_value = None, rotary_pos_emb = None, attention_bias = None, **kwargs):
         if not hasattr(self, "cfg"):
             raise ValueError(f"cfg not set for {self.name}")
 
@@ -45,6 +46,14 @@ class SelfAttention(Component):
         k = k.view(B, T, self.cfg.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, T, self.cfg.num_heads, self.head_dim).transpose(1, 2)
 
+        # Apply Rotational Position Embeddings (RoPE)
+        if rotary_pos_emb is not None:
+             cos, sin = rotary_pos_emb
+             # q, k shape: (B, H, T, D)
+             # cos, sin shape: (1, 1, T, D) or broadcastable
+             q = apply_rotary_pos_emb(q, cos, sin)
+             k = apply_rotary_pos_emb(k, cos, sin)
+
         if past_key_value is not None:
             past_k, past_v = past_key_value
             k = torch.cat([past_k, k], dim=2)
@@ -53,6 +62,10 @@ class SelfAttention(Component):
         current_key_value = (k, v)
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
+        
+        # Apply ALiBi or other attention bias
+        if attention_bias is not None:
+             attn = attn + attention_bias
 
         if mask is not None:
             attn = attn.masked_fill(mask == 0, float('-inf'))

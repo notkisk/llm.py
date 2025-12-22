@@ -51,17 +51,15 @@ print("=" * 50)
 x = torch.randint(0, cfg.vocab_size, (2, 32))
 out = model(x)
 print(f"Input shape: {x.shape}")
-print(f"Output shape: {out.shape}")  # Should be [2, 32, vocab_size]
+print(f"Output shape: {out.shape}")  
 
 # Run Generation
 print("\n" + "=" * 50)
 print("Generation Demo (Random Weights):")
 print("=" * 50)
-# Start with a single token (e.g., token ID 1)
 start_ids = torch.tensor([[1]], dtype=torch.long)
 print(f"Starting ID: {start_ids.tolist()}")
 
-# Generate 10 new tokens
 generated = model.generate(start_ids, max_new_tokens=10, temperature=0.0)
 print(f"Generated Sequence: {generated.tolist()}")
 print("(Note: Output is random integers because model is initialized with random weights)")
