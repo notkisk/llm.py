@@ -3,14 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from ...component import Component
 from ..pos.rotary import apply_rotary_pos_emb
+from .sliding_window import create_sliding_window_mask, apply_rolling_buffer
 
 class SelfAttention(Component):
-    def __init__(self, bias: bool = False, dropout: float = 0.0, is_causal: bool = True):
+    def __init__(self, bias: bool = False, dropout: float = 0.0, is_causal: bool = True, window_size=None):
         super().__init__(name="SelfAttention")
-        # ... existing init ...
         self.bias = bias
         self.dropout_p = dropout
         self.is_causal = is_causal
+        self.window_size = window_size
         self.norm = None
         self.qkv = None
         self.proj = None
@@ -54,12 +55,16 @@ class SelfAttention(Component):
              q = apply_rotary_pos_emb(q, cos, sin)
              k = apply_rotary_pos_emb(k, cos, sin)
 
-        if past_key_value is not None:
-            past_k, past_v = past_key_value
-            k = torch.cat([past_k, k], dim=2)
-            v = torch.cat([past_v, v], dim=2)
-        
-        current_key_value = (k, v)
+        # Apply rolling buffer for KV cache management
+        if self.window_size is not None:
+            k, v, current_key_value = apply_rolling_buffer(k, v, past_key_value, self.window_size)
+        else:
+            # Standard KV cache concatenation
+            if past_key_value is not None:
+                past_k, past_v = past_key_value
+                k = torch.cat([past_k, k], dim=2)
+                v = torch.cat([past_v, v], dim=2)
+            current_key_value = (k, v)
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
         
@@ -67,18 +72,18 @@ class SelfAttention(Component):
         if attention_bias is not None:
              attn = attn + attention_bias
 
+        # Apply masking
         if mask is not None:
             attn = attn.masked_fill(mask == 0, float('-inf'))
         elif self.is_causal and T > 1:
-            # Apply causal mask: mask positions where q_i attends to k_j with j > i
-            # q shape (B, H, T, D). k shape (B, H, T_k, D).
-            # attn shape (B, H, T, T_k).
-            # We want diag to include self.
-            # j > i + (T_k - T)?
-            # Case Naive: T_k = T. j > i. 
             T_k = k.size(2)
-            causal_mask = torch.triu(torch.ones(T, T_k, device=x.device), diagonal=1 + T_k - T).bool()
-            attn = attn.masked_fill(causal_mask, float('-inf'))
+            # Use sliding window mask if window_size is set, otherwise use standard causal mask
+            if self.window_size is not None:
+                sliding_mask = create_sliding_window_mask(T, T_k, self.window_size, x.device)
+                attn = attn.masked_fill(sliding_mask, float('-inf'))
+            else:
+                causal_mask = torch.triu(torch.ones(T, T_k, device=x.device), diagonal=1 + T_k - T).bool()
+                attn = attn.masked_fill(causal_mask, float('-inf'))
 
         attn = F.softmax(attn, dim=-1)
         attn = self.attn_drop(attn)

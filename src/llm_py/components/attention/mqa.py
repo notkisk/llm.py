@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from ...component import Component
 from ..pos.rotary import apply_rotary_pos_emb
+from .sliding_window import create_sliding_window_mask, apply_rolling_buffer
 
 class MultiQueryAttention(Component):
 	"""Multi-Query Attention: single KV head shared across all query heads.
@@ -16,11 +17,13 @@ class MultiQueryAttention(Component):
 	Args:
 		bias: Whether to use bias in linear layers
 		dropout: Attention dropout probability
+		window_size: Sliding window size for local attention (None = full attention)
 	"""
-	def __init__(self, bias: bool = False, dropout: float = 0.0):
+	def __init__(self, bias: bool = False, dropout: float = 0.0, window_size=None):
 		super().__init__(name="MultiQueryAttention")
 		self.bias = bias
 		self.dropout_p = dropout
+		self.window_size = window_size
 		self.q_proj = None
 		self.k_proj = None
 		self.v_proj = None
@@ -43,15 +46,16 @@ class MultiQueryAttention(Component):
 		self.attn_drop = nn.Dropout(self.dropout_p)
 		self.proj_drop = nn.Dropout(self.dropout_p)
 
-	def forward(self, x, mask: torch.Tensor = None, rotary_pos_emb = None, attention_bias = None, **kwargs):
+	def forward(self, x, mask: torch.Tensor = None, past_key_value = None, rotary_pos_emb = None, attention_bias = None, **kwargs):
 		"""Forward pass.
 		
 		Args:
 			x: Input tensor of shape (batch, seq_len, dim)
 			mask: Optional attention mask
+			past_key_value: Optional tuple of (past_k, past_v) for KV caching
 		
 		Returns:
-			Output tensor with residual connection
+			Tuple of (output tensor with residual connection, current_key_value)
 		"""
 		B, T, C = x.shape
 		if C != self.cfg.dim:
@@ -71,13 +75,30 @@ class MultiQueryAttention(Component):
 			q = apply_rotary_pos_emb(q, cos, sin)
 			k = apply_rotary_pos_emb(k, cos, sin)
 
+		# Apply rolling buffer for KV cache management
+		if self.window_size is not None:
+			k, v, current_key_value = apply_rolling_buffer(k, v, past_key_value, self.window_size)
+		else:
+			# Standard KV cache concatenation
+			if past_key_value is not None:
+				past_k, past_v = past_key_value
+				k = torch.cat([past_k, k], dim=2)
+				v = torch.cat([past_v, v], dim=2)
+			current_key_value = (k, v)
+
 		attn = (q @ k.transpose(-2, -1)) * self.scale  # (batch, heads, seq_len, seq_len)
 
 		if attention_bias is not None:
 			attn = attn + attention_bias
 
-		causal_mask = torch.triu(torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1)
-		attn = attn.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
+		# Apply masking
+		T_k = k.size(2)
+		if self.window_size is not None:
+			sliding_mask = create_sliding_window_mask(T, T_k, self.window_size, x.device)
+			attn = attn.masked_fill(sliding_mask, float('-inf'))
+		else:
+			causal_mask = torch.triu(torch.ones(T, T_k, device=x.device, dtype=torch.bool), diagonal=1 + T_k - T)
+			attn = attn.masked_fill(causal_mask, float('-inf'))
 
 		if mask is not None:
 			if mask.dim() == 2:
@@ -93,5 +114,5 @@ class MultiQueryAttention(Component):
 		out = self.proj(out)
 		out = self.proj_drop(out)
 
-		return x + out
+		return x + out, current_key_value
 

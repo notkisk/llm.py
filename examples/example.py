@@ -64,3 +64,73 @@ generated = model.generate(start_ids, max_new_tokens=10, temperature=0.0)
 print(f"Generated Sequence: {generated.tolist()}")
 print("(Note: Output is random integers because model is initialized with random weights)")
 
+
+
+model_sliding = (
+    Model(cfg)
+        .add(Embedding())
+        .add(RotaryPE())
+        .repeat(SelfAttention, 4, dropout=0.1, window_size=128)
+        .add(FeedForward())
+        .add(LMHead(tie_weights=True))
+)
+
+model_sliding.validate()
+print(f"  Parameters: {model_sliding.num_parameters:,}")
+
+# Test forward pass
+x_test = torch.randint(0, cfg.vocab_size, (2, 32))
+out_test = model_sliding(x_test)
+print(f"✓ Forward pass: input {x_test.shape} → output {out_test.shape}")
+
+# Test generation with KV cache and rolling buffer
+generated_sliding = model_sliding.generate(start_ids, max_new_tokens=20, temperature=0.0)
+print(f"✓ Generation with rolling buffer: {len(generated_sliding[0])} tokens")
+
+model_mixed = (
+    Model(cfg)
+        .add(Embedding())
+        .add(RotaryPE())
+        .repeat(SelfAttention, 2, window_size=256)  
+        .repeat(SelfAttention, 2)                    
+        .add(FeedForward())
+        .add(LMHead(tie_weights=True))
+)
+
+model_mixed.validate()
+
+x_test = torch.randint(0, cfg.vocab_size, (2, 32))
+out_test = model_mixed(x_test)
+print(f"✓ Forward pass: input {x_test.shape} → output {out_test.shape}")
+
+from llm_py import MultiQueryAttention, GroupedQueryAttention
+
+model_mqa = (
+    Model(cfg)
+        .add(Embedding())
+        .add(RotaryPE())
+        .repeat(MultiQueryAttention, 4, window_size=512)
+        .add(FeedForward())
+        .add(LMHead(tie_weights=True))
+)
+
+model_mqa.validate()
+print(f"MQA with sliding window (512 tokens): {model_mqa.num_parameters:,} params")
+
+model_gqa = (
+    Model(cfg)
+        .add(Embedding())
+        .add(RotaryPE())
+        .repeat(GroupedQueryAttention, 4, num_kv_heads=4, window_size=256)
+        .add(FeedForward())
+        .add(LMHead(tie_weights=True))
+)
+
+model_gqa.validate()
+print(f"GQA with sliding window (256 tokens): {model_gqa.num_parameters:,} params")
+
+x_test = torch.randint(0, cfg.vocab_size, (2, 32))
+out_mqa = model_mqa(x_test)
+out_gqa = model_gqa(x_test)
+print(f"MQA forward: {x_test.shape} → {out_mqa.shape}")
+print(f"GQA forward: {x_test.shape} → {out_gqa.shape}")
